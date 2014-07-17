@@ -1,0 +1,29 @@
+* Overview
+Master (mistress?) election, an implementation of the Zookeeper leader
+election protocol found in the Zookeeper cookbook.
+* Example
+#+BEGIN_SRC Erlang
+%% set up a connection to Zookeeper
+{ok, ZkPid} = ezk:start_connection(),
+
+%% define a function to be executed as master
+Fun = fun() ->
+        io:format("I am master")
+      end,
+
+%% start leader election, runs 'Fun' after acquiring '/locks/foo'
+{ok, LockPid} = emaster:spawn_link([ {lock,   "/locks/foo"}
+                                   , {func,   Fun}
+                                   , {zk_pid, ZkPid}
+                                   ]),
+
+%% wait for result
+receive
+  {'EXIT', LockPid, normal} ->;
+    %% everything went well, Fun has been executed
+    ok;
+  {'EXIT', LockPid, _} ->
+    %% something went wrong
+    ok
+end,
+#+END_SRC
