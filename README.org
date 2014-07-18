@@ -1,7 +1,7 @@
-* Overview
+* zk_utils_master
 Master (mistress?) election, an implementation of the Zookeeper leader
 election protocol found in the Zookeeper cookbook.
-* Example
+** Example
 #+BEGIN_SRC Erlang
 %% set up a connection to Zookeeper
 {ok, ZkPid} = ezk:start_connection(),
@@ -12,10 +12,10 @@ Fun = fun() ->
       end,
 
 %% start leader election, runs 'Fun' after acquiring '/locks/foo'
-{ok, LockPid} = emaster:spawn_link([ {lock,   "/locks/foo"}
-                                   , {func,   Fun}
-                                   , {zk_pid, ZkPid}
-                                   ]),
+{ok, LockPid} = zk_utils_master:spawn_link([ {lock,   "/locks/foo"}
+                                           , {func,   Fun}
+                                           , {zk_pid, ZkPid}
+                                           ]),
 
 %% wait for result
 receive
@@ -26,4 +26,17 @@ receive
     %% something went wrong
     ok
 end,
+#+END_SRC
+
+* zk_utils_queue
+Queue abstraction
+** Example
+#+BEGIN_SRC Erlang
+Q              = "/queues/somequeue",
+{ok, ZkPid}    = ezk:start_connection(),
+ok             = zk_utils_queue:enqueue(foo, Q, ZkPid),
+ok             = zk_utils_queue:enqueue(bar, Q, ZkPid),
+{ok, foo}      = zk_utils_queue:dequeue(Q, ZkPid),
+{ok, bar}      = zk_utils_queue:dequeue(Q, ZkPid),
+{error, empty} = zk_utils_queue:dequeue(Q, ZkPid),
 #+END_SRC
