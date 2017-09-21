@@ -4,7 +4,7 @@ election protocol found in the Zookeeper cookbook.
 ** Example
 #+BEGIN_SRC Erlang
 %% set up a connection to Zookeeper
-{ok, ZkPid} = ezk:start_connection(),
+{ok, ZkPid} = erlzk:connect([{"localhost", 2181}], 30000),
 
 %% define a function to be executed as master
 Fun = fun() ->
@@ -33,7 +33,7 @@ Queue abstraction
 ** Example
 #+BEGIN_SRC Erlang
 Q              = "/queues/somequeue",
-{ok, ZkPid}    = ezk:start_connection(),
+{ok, ZkPid}    = erlzk:connect([{"localhost", 2181}], 30000),
 ok             = zk_utils_queue:enqueue(foo, Q, ZkPid),
 ok             = zk_utils_queue:enqueue(bar, Q, ZkPid),
 {ok, foo}      = zk_utils_queue:dequeue(Q, ZkPid),
