@@ -39,6 +39,7 @@
            , zk_seqno = error('s.seqno')
            , zk_pid   = error('s.pid')
            , zk_state = candidate        %candidate | leader
+           , zk_path  = error('s.zk_path')
            }).
 
 %%%_ * API -------------------------------------------------------------
@@ -54,18 +55,19 @@ init(Args) ->
   {ok, Func}  = s2_lists:assoc(Args, func),
   {ok, Lock}  = s2_lists:assoc(Args, lock),
   {ok, ZkPid} = s2_lists:assoc(Args, zk_pid),
-  Seqno       = init_lock(ZkPid, Lock),
+  Path        = init_lock(ZkPid, Lock),
+  {_, Seqno}  = split(filename:basename(Path)),
   {ok, #s{ func     = Func
          , lock     = Lock
          , zk_seqno = Seqno
-         , zk_pid   = ZkPid}, 0}.
+         , zk_pid   = ZkPid
+         , zk_path  = Path
+         }, 0}.
 
 terminate(Rsn, S) ->
   [exit(S#s.mm_pid, Rsn) || S#s.mm_pid =/= undefined],
-  case ezk:delete(S#s.zk_pid, S#s.lock ++ "_" ++ S#s.zk_seqno) of
-    {ok, _}                        -> ok;
-    {error, {no_zk_connection, _}} -> ok
-  end.
+  erlzk:delete(S#s.zk_pid, S#s.zk_path),
+  ok.
 
 handle_call(stop, _From, S) ->
   {stop, normal, ok, S}.
@@ -73,18 +75,13 @@ handle_call(stop, _From, S) ->
 handle_cast(Msg, S) ->
   {stop, {bad_cast, Msg}, S}.
 
-%% received when connection is lost
-handle_info({watchlost, _Msg, _Data} = Msg, S) ->
-  {stop, {watchlost, Msg}, S};
 %% received if someone else changes our z-node (ie: should not happen..)
-handle_info({self, {_Path, _Type, _SyncCon}} = Msg, S) ->
+handle_info({node_deleted, Path} = Msg, #s{zk_path=Path} = S) ->
   {stop, {self_changed, Msg}, S};
 %% received when parent node changes
-handle_info({daddy, {_Path, _Type, _SyncCon}} = Msg,
-            #s{zk_state=leader} = S) ->
+handle_info({node_deleted, _Path} = Msg, #s{zk_state=leader} = S) ->
   {stop, {unexpected_msg, Msg}, S};
-handle_info({daddy, {_Path, _Type, _SyncCon}},
-            #s{zk_state=candidate} = S) ->
+handle_info({node_deleted, _Path}, #s{zk_state=candidate} = S) ->
   case try_get_lock(S#s.zk_pid, S#s.zk_seqno, S#s.lock, S#s.func) of
     {ok, Pid}     -> {noreply, S#s{zk_state=leader, mm_pid=Pid}};
     {error, wait} -> {noreply, S}
@@ -106,23 +103,22 @@ code_change(_OldVsn, S, _Extra) ->
 
 %%%_ * Internals -------------------------------------------------------
 init_lock(Pid, Lock) ->
-  {ok, _}    = ezk:ensure_path(Pid, filename:dirname(Lock)),
+  {ok, _}    = zk_utils:ensure_path(Pid, filename:dirname(Lock)),
   %% create a node with ephemeral and sequence flag set
-  {ok, Path} = ezk:create(Pid, Lock ++ "_", <<"">>, es),
+  {ok, Path} = erlzk:create(Pid, Lock ++ "_", ephemeral_sequential),
   %% figure out which seqence number we got and put a constant watch on
   %% that one. This should not be necessary but if someone fucks with us
   %% and deletes our node we want to know.
-  {_, Seqno} = split(filename:basename(Path)),
-  {ok, _}    = ezk:ls(Pid, Path, self(), self),
-  Seqno.
+  {ok, _}    = erlzk:exists(Pid, Path, self()),
+  Path.
 
 try_get_lock(Pid, MySeqno, Lock, Func) ->
   %% figure out who else is trying to grab the lock
-  {ok, Files} = ezk:ls(Pid, filename:dirname(Lock)),
+  {ok, Files} = erlzk:get_children(Pid, filename:dirname(Lock)),
   Service     = filename:basename(Lock),
   Seqnos      = lists:filtermap(
                   fun(File) ->
-                      case split(?b2l(File)) of
+                      case split(File) of
                         {Service, Seqno} -> {true, Seqno};
                         {_,       _    } -> false
                       end
@@ -143,9 +139,9 @@ try_get_lock(Pid, MySeqno, Lock, Func) ->
       {ok, spawn_link(Func)};
     Monitor ->
       %% monitor the one before us for change
-      case ezk:ls(Pid, Lock ++ "_" ++ Monitor, self(), daddy) of
+      case erlzk:exists(Pid, Lock ++ "_" ++ Monitor, self()) of
         {ok, _}         -> {error, wait};
-        {error, no_dir} ->
+        {error, no_node} ->
           %% something happened to that one and it disappeared, rerun
           %% the whole function again.
           try_get_lock(Pid, MySeqno, Lock, Func)
