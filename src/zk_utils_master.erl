@@ -105,7 +105,10 @@ code_change(_OldVsn, S, _Extra) ->
 init_lock(Pid, Lock) ->
   {ok, _}    = zk_utils:ensure_path(Pid, filename:dirname(Lock)),
   %% create a node with ephemeral and sequence flag set
-  {ok, Path} = erlzk:create(Pid, Lock ++ "_", ephemeral_sequential),
+  {ok, Path} = erlzk:create( Pid
+                           , Lock ++ "_"
+                           , list_to_binary(atom_to_list(node()))
+                           , ephemeral_sequential ),
   %% figure out which seqence number we got and put a constant watch on
   %% that one. This should not be necessary but if someone fucks with us
   %% and deletes our node we want to know.
