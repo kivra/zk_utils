@@ -44,6 +44,7 @@
 
 %%%_ * API -------------------------------------------------------------
 start_link(Args) ->
+  ?info("++++++++++ start_link: Args ~p", [Args]),
   gen_server:start_link(?MODULE, Args, []).
 
 stop(Ref) ->
@@ -51,6 +52,7 @@ stop(Ref) ->
 
 %%%_ * gen_server callbacks --------------------------------------------
 init(Args) ->
+  ?info("++++++++++ init"),
   process_flag(trap_exit, true),
   {ok, Func}  = s2_lists:assoc(Args, func),
   {ok, Lock}  = s2_lists:assoc(Args, lock),
@@ -77,17 +79,21 @@ handle_cast(Msg, S) ->
 
 %% received if someone else changes our z-node (ie: should not happen..)
 handle_info({node_deleted, Path} = Msg, #s{zk_path=Path} = S) ->
+  ?info("++++++++++ handle_info: self_changed"),
   {stop, {self_changed, Msg}, S};
 %% received when parent node changes
 handle_info({node_deleted, _Path} = Msg, #s{zk_state=leader} = S) ->
+  ?info("++++++++++ handle_info: node_deleted: leader"),
   {stop, {unexpected_msg, Msg}, S};
 handle_info({node_deleted, _Path}, #s{zk_state=candidate} = S) ->
+  ?info("++++++++++ handle_info: node_deleted: zk_seqno: ~p", [S#s.zk_seqno]),
   case try_get_lock(S#s.zk_pid, S#s.zk_seqno, S#s.lock, S#s.func) of
     {ok, Pid}     -> {noreply, S#s{zk_state=leader, mm_pid=Pid}};
     {error, wait} -> {noreply, S}
   end;
 %% initial attempt to get lock
 handle_info(timeout, S) ->
+  ?info("++++++++++ handle_info: timeout: zk_seqno: ~p", [S#s.zk_seqno]),
   case try_get_lock(S#s.zk_pid, S#s.zk_seqno, S#s.lock, S#s.func) of
     {ok, Pid}     -> {noreply, S#s{zk_state=leader, mm_pid=Pid}};
     {error, wait} -> {noreply, S}
@@ -103,21 +109,26 @@ code_change(_OldVsn, S, _Extra) ->
 
 %%%_ * Internals -------------------------------------------------------
 init_lock(Pid, Lock) ->
+  ?info("++++++++++ init_lock"),
   {ok, _}    = zk_utils:ensure_path(Pid, filename:dirname(Lock)),
   %% create a node with ephemeral and sequence flag set
   {ok, Path} = erlzk:create( Pid
                            , Lock ++ "_"
                            , list_to_binary(atom_to_list(node()))
                            , ephemeral_sequential ),
+  ?info("++++++++++ init_lock: Path: ~p (node ~p)", [Path, node()]),
   %% figure out which seqence number we got and put a constant watch on
   %% that one. This should not be necessary but if someone fucks with us
   %% and deletes our node we want to know.
   {ok, _}    = erlzk:exists(Pid, Path, self()),
+  ?info("++++++++++ init_lock: done"),
   Path.
 
 try_get_lock(Pid, MySeqno, Lock, Func) ->
+  ?info("++++++++++ try_get_lock: MySeqno ~p", [MySeqno]),
   %% figure out who else is trying to grab the lock
   {ok, Files} = erlzk:get_children(Pid, filename:dirname(Lock)),
+  ?info("++++++++++ try_get_lock: Files: ~p", [Files]),
   Service     = filename:basename(Lock),
   Seqnos      = lists:filtermap(
                   fun(File) ->
@@ -126,6 +137,7 @@ try_get_lock(Pid, MySeqno, Lock, Func) ->
                         {_,       _    } -> false
                       end
                   end, Files),
+  ?info("++++++++++ try_get_lock: Service: ~p, Seqnos ~p", [Service, Seqnos]),
   %% figure out who has largest sequence number that is still
   %% smaller than our sequence number.
   %% If we don't find any it means we are the leader otherwise
@@ -139,12 +151,17 @@ try_get_lock(Pid, MySeqno, Lock, Func) ->
          end, undefined, Seqnos) of
     undefined ->
       %% no smaller number found, we must be the leader
+      ?info("++++++++++ try_get_lock: no smaller number found, we must be the leader"),
       {ok, spawn_link(Func)};
     Monitor ->
+      ?info("++++++++++ try_get_lock: Monitor: ~p", [Monitor]),
       %% monitor the one before us for change
       case erlzk:exists(Pid, Lock ++ "_" ++ Monitor, self()) of
-        {ok, _}         -> {error, wait};
+        {ok, _}         ->
+          ?info("++++++++++ try_get_lock: erlzk:exists: {ok, _}"),
+          {error, wait};
         {error, no_node} ->
+          ?info("++++++++++ try_get_lock: erlzk:exists: {error, no_node}"),
           %% something happened to that one and it disappeared, rerun
           %% the whole function again.
           try_get_lock(Pid, MySeqno, Lock, Func)
